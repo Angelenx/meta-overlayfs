@@ -4,8 +4,24 @@
 # Module installation hook for ext4 image support
 ############################################
 
+# 尝试使用 /tmp（通常是 tmpfs/ramdisk），如果失败则回退到 /data/local/tmp
+# Try /tmp first (usually tmpfs/ramdisk), fallback to /data/local/tmp
+for LOG_DIR in /tmp /data/local/tmp; do
+    if [ -d "$LOG_DIR" ] && touch "$LOG_DIR/.write_test" 2>/dev/null; then
+        rm -f "$LOG_DIR/.write_test"
+        LOG_FILE="$LOG_DIR/metainstall-${MODID}.log"
+        LOG_LOCATION="$LOG_DIR"
+        break
+    fi
+done
+
+# Fallback if all else fails
+if [ -z "$LOG_FILE" ]; then
+    LOG_FILE="/data/local/tmp/metainstall-${MODID}.log"
+    LOG_LOCATION="/data/local/tmp"
+fi
+
 # 重定向所有输出到日志文件 + stdout
-LOG_FILE="/data/local/tmp/metainstall-${MODID}.log"
 exec > >(tee -a "$LOG_FILE")
 exec 2>&1
 
@@ -14,6 +30,7 @@ echo "MODPATH=$MODPATH"
 echo "MODID=$MODID"
 echo "ZIPFILE=$ZIPFILE"
 echo "Time: $(date)"
+echo "Log location: $LOG_FILE ($LOG_LOCATION)"
 
 # Constants
 IMG_FILE="/data/adb/metamodule/modules.img"
