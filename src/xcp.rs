@@ -6,7 +6,11 @@ use std::{
     path::Path,
 };
 
-/// Handle the `xcp` command: copy sparse file with optional hole punching.
+/// 处理 `meta-overlayfs xcp ...` 子命令。
+///
+/// 用途（本仓库内）：
+/// 在 `metamodule/customize.sh` 安装元模块时，如果发现旧的 `modules.img` ext4 镜像，
+/// 会用本子命令复制稀疏文件内容到新镜像位置，避免无谓的完整写入。
 pub fn run(args: &[String]) -> Result<()> {
     let mut positional: Vec<&str> = Vec::with_capacity(2);
     let mut punch_hole = false;
@@ -43,6 +47,9 @@ pub fn copy_sparse_file<P: AsRef<Path>, Q: AsRef<Path>>(
     dst: Q,
     punch_hole: bool,
 ) -> Result<()> {
+    // 1) 打开源文件/目标文件
+    // 2) 通过 `scan_chunks()` 找到源文件的稀疏段
+    // 3) 仅拷贝 Data 段；如果开启 `punch_hole`，且 data 段全为 0，则跳过该段写入
     let mut src_file = File::open(src.as_ref())
         .with_context(|| format!("failed to open {}", src.as_ref().display()))?;
     let mut dst_file = OpenOptions::new()

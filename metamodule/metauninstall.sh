@@ -14,13 +14,13 @@ fi
 
 echo "- Cleaning up module content from image: $MODULE_ID"
 
-# Check if image is mounted
+# 检查镜像是否已挂载；如果未挂载则无需清理（通常不会出现，但这里保证幂等性）。
 if ! mountpoint -q "$MNT_DIR" 2>/dev/null; then
     echo "! Warning: Image not mounted, skipping cleanup"
     exit 0
 fi
 
-# Remove module content from image
+# 从 ext4 镜像中移除该普通模块归档的分区目录（例如 $MODULE_ID/system）。
 MOD_IMG_DIR="$MNT_DIR/$MODULE_ID"
 if [ -d "$MOD_IMG_DIR" ]; then
     echo "  Removing $MOD_IMG_DIR"

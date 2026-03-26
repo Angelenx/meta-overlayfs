@@ -1,5 +1,17 @@
-// Overlayfs mounting implementation
-// Migrated from ksud/src/mount.rs and ksud/src/init_event.rs
+//! Dual-directory metamodule mount handler.
+//!
+//! `metamodule/metamount.sh` 会在启动期间执行本二进制，并通过环境变量将：
+//! - metadata 目录（默认 `/data/adb/modules/`）
+//! - content 目录（默认 `/data/adb/metamodule/mnt/`，ext4 镜像挂载点）
+//! 传给 Rust。
+//!
+//! 本实现的目标是：
+//! 1) 扫描 enabled 的普通模块；
+//! 2) 从 content 中收集对应分区目录作为 overlayfs 的 lowerdir；
+//! 3) 在系统分区目录（`/system`、`/vendor` 等）上挂载 overlayfs；
+//! 4) 同时对分区下的既有子挂载点做一定的协调，尽量减少破坏。
+//!
+//! 关键约束：overlayfs 的 `source` 必须设置为 `"KSU"`，以便 KernelSU 正确识别并在卸载/协调时处理这些挂载。
 
 use anyhow::{Context, Result, bail};
 use log::{info, warn};
@@ -11,6 +23,15 @@ use rustix::{fd::AsFd, fs::CWD, mount::*};
 
 use crate::defs::{DISABLE_FILE_NAME, KSU_OVERLAY_SOURCE, SKIP_MOUNT_FILE_NAME, SYSTEM_RW_DIR};
 
+/// 挂载 overlayfs。
+///
+/// - `lower_dirs`：普通模块在 content 目录中的对应分区目录列表（例如多个模块的 `.../system`）。
+/// - `lowest`：stock 根目录（通常是调用者当前的分区挂载点或其相对路径）。
+/// - `upperdir/workdir`：可选读写层路径；若路径存在则启用 overlayfs 读写模式。
+/// - `dest`：挂载点（例如 `/system` 或某个 child mountpoint）。
+///
+/// 备注：为了支持 `mount_overlay()` 中的“先切换 cwd，再挂载子目录”的协调策略，
+/// 该函数会把 `lowest` 直接拼入 `lowerdir=`，允许它是相对路径。
 pub fn mount_overlayfs(
     lower_dirs: &[String],
     lowest: &str,
@@ -76,6 +97,10 @@ pub fn mount_overlayfs(
     Ok(())
 }
 
+/// 递归 bind-mount（等价于把 stock 目录原样暴露到挂载点）。
+///
+/// 当某个 child mountpoint 下 stock 存在但 enabled 模块没有覆盖对应相对路径时，
+/// 会回退到这种策略，以避免 overlayfs 覆盖破坏已有挂载结构。
 pub fn bind_mount(from: impl AsRef<Path>, to: impl AsRef<Path>) -> Result<()> {
     info!(
         "bind mount {} -> {}",
@@ -99,6 +124,12 @@ pub fn bind_mount(from: impl AsRef<Path>, to: impl AsRef<Path>) -> Result<()> {
     Ok(())
 }
 
+/// 针对某个 child mountpoint 进行 overlay/bind 协调。
+///
+/// - `mount_point`：要挂载的点（绝对路径）
+/// - `relative`：`mount_point` 相对当前分区根目录的路径片段（例如 `"/etc"`）
+/// - `module_roots`：各 enabled 模块在 content 中的“分区根目录列表”（例如 `.../system`）
+/// - `stock_root`：stock 的对应目录（可能是相对路径，依赖上层的 cwd）
 fn mount_overlay_child(
     mount_point: &str,
     relative: &String,
@@ -136,6 +167,14 @@ fn mount_overlay_child(
     Ok(())
 }
 
+/// 挂载整个分区根目录的 overlay，并协调该分区下已存在的子挂载点。
+///
+/// 调用者会在进入该函数时把 `root`（例如 `/system`）作为参数传入。
+/// 本函数会：
+/// 1) `chdir(root)`，使后续对子路径的解析尽可能在同一上下文下完成；
+/// 2) 先挂载 root 的 overlay；
+/// 3) 遍历 `/proc/self/mountinfo` 中该分区下已有的 mountpoint，
+///    对每个 child 决定 overlay 或 bind。
 pub fn mount_overlay(
     root: &String,
     module_roots: &Vec<String>,
@@ -181,6 +220,7 @@ pub fn mount_overlay(
     Ok(())
 }
 
+/// 卸载给定目录对应的挂载点。
 pub fn umount_dir(src: impl AsRef<Path>) -> Result<()> {
     unmount(src.as_ref(), UnmountFlags::empty())
         .with_context(|| format!("Failed to umount {}", src.as_ref().display()))?;
@@ -189,6 +229,10 @@ pub fn umount_dir(src: impl AsRef<Path>) -> Result<()> {
 
 // ========== Mount coordination logic (from init_event.rs) ==========
 
+/// 挂载某个分区（`system`/`vendor`/...）。
+///
+/// - 若 `/system` 等目录是 symlink，则跳过对其的 overlay（避免覆盖掉指向关系）。
+/// - 若存在 `/data/adb/modules/.rw/<partition>/{upperdir,workdir}`，则启用可写层。
 fn mount_partition(partition_name: &str, lowerdir: &Vec<String>) -> Result<()> {
     if lowerdir.is_empty() {
         warn!("partition: {partition_name} lowerdir is empty");
@@ -217,6 +261,11 @@ fn mount_partition(partition_name: &str, lowerdir: &Vec<String>) -> Result<()> {
 /// Collect enabled module IDs from metadata directory
 ///
 /// Reads module list and status from metadata directory, returns enabled module IDs
+///
+/// 规则：
+/// - `disable` 存在：禁用
+/// - `skip_mount` 存在：跳过挂载
+/// - `module.prop` 缺失：跳过（但保留 `.rw` 目录自身）
 fn collect_enabled_modules(metadata_dir: &str) -> Result<Vec<String>> {
     let dir = std::fs::read_dir(metadata_dir)
         .with_context(|| format!("Failed to read metadata directory: {}", metadata_dir))?;
@@ -263,6 +312,11 @@ fn collect_enabled_modules(metadata_dir: &str) -> Result<Vec<String>> {
 /// Parameters:
 /// - metadata_dir: Metadata directory, stores module.prop, disable, skip_mount, etc.
 /// - content_dir: Content directory, stores system/, vendor/ and other partition content (ext4 image mount point)
+///
+/// 逻辑：
+/// 1) 扫描 enabled 模块；
+/// 2) 从 content 中读取每个模块对应分区目录作为 lowerdir；
+/// 3) 对 `/system` 以及其它分区分别执行 overlay 挂载。
 pub fn mount_modules_systemlessly(metadata_dir: &str, content_dir: &str) -> Result<()> {
     info!("Scanning modules (dual-directory mode)");
     info!("  Metadata: {}", metadata_dir);

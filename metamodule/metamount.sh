@@ -1,12 +1,25 @@
 #!/system/bin/sh
 # meta-overlayfs Module Mount Handler
-# This script is the entry point for dual-directory module mounting
+# This script is the entry point for dual-directory module mounting.
+#
+# 运行时职责：
+# 1) 挂载（或确认已挂载）ext4 镜像 modules.img，得到内容根目录 MNT_DIR；
+# 2) 导出给 Rust 挂载程序的环境变量：
+#    - MODULE_METADATA_DIR：普通模块元数据目录（默认 /data/adb/modules）
+#    - MODULE_CONTENT_DIR：普通模块内容目录（来自 ext4 镜像的 mnt 挂载点）
+# 3) 执行架构相关的挂载二进制（meta-overlayfs）。
 
 MODDIR="${0%/*}"
 IMG_FILE="$MODDIR/modules.img"
 MNT_DIR="$MODDIR/mnt"
 RW_ROOT="/data/adb/modules/.rw"
 PARTITIONS="system vendor product system_ext odm oem"
+
+# RW_ROOT 目录约定：
+# - 用户/安装脚本可手动创建：
+#   /data/adb/modules/.rw/<partition>/{upperdir,workdir}
+# - 若这些目录存在，本脚本会尽量对其应用与系统分区相同的 SELinux context，
+#   以降低 overlayfs 挂载失败的概率。
 
 # Log function
 log() {

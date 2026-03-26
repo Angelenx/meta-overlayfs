@@ -5,14 +5,14 @@ A reference implementation of the overlayfs mount handler for KernelSU metamodul
 ## Installation
 
 ```bash
-adb push meta-overlayfs-v1.0.0.zip /sdcard/
-adb shell su -c 'ksud module install /sdcard/meta-overlayfs-v1.0.0.zip'
+adb push meta-overlayfs-vX.Y.Z.zip /sdcard/
+adb shell su -c 'ksud module install /sdcard/meta-overlayfs-vX.Y.Z.zip'
 adb reboot
 ```
 
 Or install via KernelSU Manager → Modules.
 
-**Note**: The metamodule is now installed as a regular module to `/data/adb/modules/meta-overlay/`, with a symlink created at `/data/adb/metamodule` pointing to it.
+**Note**: The metamodule is installed as a regular module to `/data/adb/modules/meta-overlayfs/`, with a symlink created at `/data/adb/metamodule` pointing to it.
 
 ## How It Works
 
@@ -51,7 +51,10 @@ Automatically selects aarch64 or x86_64 binary during installation (~500KB).
 ./build.sh
 ```
 
-Output: `target/meta-overlayfs-v1.0.0.zip`
+Output: `target/meta-overlayfs-vX.Y.Z.zip`
+
+## Development
+See [`DEVELOPMENT.md`](./DEVELOPMENT.md) for a deeper explanation of the runtime flow, the Rust mount implementation, and how to extend/test this metamodule.
 
 ## License
 

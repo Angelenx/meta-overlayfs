@@ -2,11 +2,12 @@
 
 ui_print "- Detecting device architecture..."
 
-# Detect architecture using ro.product.cpu.abi
+# Detect architecture using `ro.product.cpu.abi`.
+# KernelSU 在安装 metamodule 时会把本脚本内置到安装环境中，从而提供 `ui_print/abort/grep_get_prop` 等函数。
 ABI=$(grep_get_prop ro.product.cpu.abi)
 ui_print "- Detected ABI: $ABI"
 
-# Select the correct binary based on architecture
+# Select the correct Rust binary based on architecture.
 case "$ABI" in
     arm64-v8a)
         ARCH_BINARY="meta-overlayfs-aarch64"
@@ -23,14 +24,14 @@ case "$ABI" in
         ;;
 esac
 
-# Verify the selected binary exists
+# Verify the selected binary exists in the module payload.
 if [ ! -f "$MODPATH/$ARCH_BINARY" ]; then
     abort "! Binary not found: $ARCH_BINARY"
 fi
 
 ui_print "- Installing $ARCH_BINARY as meta-overlayfs"
 
-# Rename the selected binary to the generic name
+# Rename the selected binary to the generic name.
 mv "$MODPATH/$ARCH_BINARY" "$MODPATH/meta-overlayfs" || abort "! Failed to rename binary"
 
 # Remove the unused binary
@@ -41,23 +42,25 @@ chmod 755 "$MODPATH/meta-overlayfs" || abort "! Failed to set permissions"
 
 ui_print "- Architecture-specific binary installed successfully"
 
-# Create ext4 image for module content storage
+# Create or reuse ext4 image for module content storage.
+# 该镜像最终会被挂载到 `metamount.sh` 的 `$MNT_DIR`，并作为普通模块 lowerdir 的来源。
 IMG_FILE="$MODPATH/modules.img"
 IMG_SIZE_MB=2048
 EXISTING_IMG="/data/adb/modules/$MODID/modules.img"
 
 if [ -f "$EXISTING_IMG" ]; then
     ui_print "- Reusing modules image from previous install"
+    # 若已有旧镜像，则用 Rust xcp 子命令复制稀疏文件内容以避免完整写入。
     "$MODPATH/meta-overlayfs" xcp "$EXISTING_IMG" "$IMG_FILE" || \
         abort "! Failed to copy existing modules image"
 else
     ui_print "- Creating 2GB ext4 image for module storage"
 
-    # Create sparse file (2GB logical size, 0 bytes actual)
+    # Create sparse file (2GB logical size, 0 bytes actual).
     truncate -s ${IMG_SIZE_MB}M "$IMG_FILE" || \
         abort "! Failed to create image file"
 
-    # Remove journal to prevent creating jbd2 sysfs node
+    # Remove journal to prevent creating jbd2 sysfs node.
     /system/bin/mke2fs -t ext4 -O ^has_journal -F "$IMG_FILE" >/dev/null 2>&1 || \
         abort "! Failed to format ext4 image"
 

@@ -23,8 +23,11 @@ ensure_image_mounted() {
     fi
 }
 
-# Determine whether this module should be moved into the ext4 image.
-# We only relocate payloads that expose system/ overlays and do not opt out via skip_mount.
+# 判断该普通模块是否需要把 payload 归档到 ext4 镜像中。
+#
+# 该项目的挂载 lowerdir 来自 ext4 镜像中的内容，因此：
+# - 有 `skip_mount`：完全不参与挂载（且不会归档到镜像）
+# - 没有 `system/` 目录：大概率不需要做分区挂载（这里选择不归档）
 module_requires_overlay_move() {
     if [ -f "$MODPATH/skip_mount" ]; then
         ui_print "- skip_mount flag detected; keeping files under /data/adb/modules"
@@ -39,7 +42,10 @@ module_requires_overlay_move() {
     return 0
 }
 
-# Copy SELinux contexts from src tree to destination by mirroring each entry.
+# 拷贝 SELinux 上下文。
+#
+# ext4 镜像内的文件会由运行时读取并参与挂载，因此需要尽量保持 SELinux context。
+# 这里通过 `chcon --reference` 镜像 src 中每个条目到 dst。
 copy_selinux_contexts() {
     command -v chcon >/dev/null 2>&1 || return 0
 
@@ -72,7 +78,10 @@ copy_selinux_contexts() {
     done
 }
 
-# Post-installation: move partition directories to ext4 image
+# 安装完成后的归档步骤：把分区目录拷贝到 ext4 镜像中。
+#
+# 注意：当前实现使用 `cp -af`（拷贝）而不是“移动”，因此原目录仍可能保留在
+# `/data/adb/modules/<module_id>/` 下（主要影响磁盘占用，不影响挂载逻辑）。
 post_install_to_image() {
     ui_print "- Copying module content to image"
 
@@ -82,7 +91,7 @@ post_install_to_image() {
     mkdir -p "$MOD_IMG_DIR"
     set_perm "$MOD_IMG_DIR" 0 0 0755 0644
 
-    # Move all partition directories
+            # 拷贝该模块暴露的所有分区目录（如果存在）
     for partition in system vendor product system_ext odm oem; do
         if [ -d "$MODPATH/$partition" ]; then
             ui_print "- Copying $partition/"
@@ -95,7 +104,7 @@ post_install_to_image() {
     done
 }
 
-# REPLACE
+# 当前脚本中未使用的辅助函数（保留给后续 overlay 替换/opaque 语义扩展）。
 mark_replace() {
 	replace_target="$1"
 	mkdir -p "$replace_target"

@@ -1,6 +1,13 @@
 #!/bin/bash
 set -e
 
+# Build script for meta-overlayfs.
+#
+# 功能：
+# 1) 同时构建 aarch64-linux-android 与 x86_64-linux-android 两个 Rust 二进制；
+# 2) 把二进制与 metamodule/ 中的脚本打包成一个 KernelSU 可安装的 zip；
+# 3) 产物位于 target/ 目录。
+
 # Configuration
 VERSION=$(grep '^version' Cargo.toml | head -1 | sed 's/.*"\(.*\)".*/\1/')
 OUTPUT_DIR="target"
