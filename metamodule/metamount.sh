@@ -21,9 +21,10 @@ PARTITIONS="system vendor product system_ext odm oem"
 # - 若这些目录存在，本脚本会尽量对其应用与系统分区相同的 SELinux context，
 #   以降低 overlayfs 挂载失败的概率。
 
-# Log function
+# Log function: both stdout and kernel dmesg
 log() {
     echo "[meta-overlayfs] $1"
+    echo "[meta-overlayfs] $1" > /dev/kmsg 2>/dev/null || true
 }
 
 log "Starting module mount process"
@@ -43,11 +44,12 @@ if ! mountpoint -q "$MNT_DIR" 2>/dev/null; then
 
     # Mount the ext4 image
     chcon u:object_r:ksu_file:s0 "$IMG_FILE" 2>/dev/null
-    mount -t ext4 -o loop,rw,noatime "$IMG_FILE" "$MNT_DIR" || {
-        log "ERROR: Failed to mount image"
+    if ! mount -t ext4 -o loop,rw,noatime "$IMG_FILE" "$MNT_DIR"; then
+        log "ERROR: Failed to mount image at $MNT_DIR (check dmesg for details)"
         exit 1
-    }
+    fi
     log "Image mounted successfully at $MNT_DIR"
+    ls -la "$MNT_DIR" >> /dev/kmsg 2>/dev/null || true
 else
     log "Image already mounted at $MNT_DIR"
 fi

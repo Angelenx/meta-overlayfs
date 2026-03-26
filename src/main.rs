@@ -1,23 +1,38 @@
 use anyhow::Result;
 use log::info;
+use std::fs::OpenOptions;
+use std::io::Write;
 
 mod defs;
 mod mount;
 mod xcp;
 
+/// 初始化自定义 logger，所有日志同时输出到 stderr 和 /dev/kmsg
+fn init_logger_with_dmesg() {
+    env_logger::Builder::from_default_env()
+        .format(|buf, record| {
+            let msg = format!("[meta-overlayfs] {}", record.args());
+            // 同时写到 dmesg
+            if let Ok(mut file) = OpenOptions::new().append(true).open("/dev/kmsg") {
+                let _ = writeln!(file, "{}", msg);
+            }
+            writeln!(buf, "{}", msg)
+        })
+        .filter_level(log::LevelFilter::Info)
+        .try_init()
+        .ok();
+}
+
 fn main() -> Result<()> {
     // metamount.sh 会直接运行本二进制进行挂载。
-    // customize.sh 中用于“复用已有 ext4 镜像”的场景，则会调用本二进制的子命令 `xcp`。
+    // customize.sh 中用于"复用已有 ext4 镜像"的场景，则会调用本二进制的子命令 `xcp`。
     let args: Vec<String> = std::env::args().collect();
     if matches!(args.get(1), Some(cmd) if cmd == "xcp") {
         return xcp::run(&args[2..]);
     }
 
-    // Initialize logger.
-    // RUST_LOG 由外部控制（例如通过启动脚本或手动设置）。
-    env_logger::builder()
-        .filter_level(log::LevelFilter::Info)
-        .init();
+    // Initialize logger with dmesg output.
+    init_logger_with_dmesg();
 
     info!("meta-overlayfs v{}", env!("CARGO_PKG_VERSION"));
 
@@ -32,8 +47,14 @@ fn main() -> Result<()> {
     info!("Content directory: {}", content_dir);
 
     // Execute dual-directory mounting
-    mount::mount_modules_systemlessly(&metadata_dir, &content_dir)?;
-
-    info!("Mount completed successfully");
-    Ok(())
+    match mount::mount_modules_systemlessly(&metadata_dir, &content_dir) {
+        Ok(()) => {
+            info!("Mount completed successfully");
+            Ok(())
+        }
+        Err(e) => {
+            info!("Mount failed: {:#}", e);
+            Err(e)
+        }
+    }
 }

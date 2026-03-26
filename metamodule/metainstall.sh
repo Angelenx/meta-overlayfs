@@ -4,22 +4,43 @@
 # Module installation hook for ext4 image support
 ############################################
 
+# 重定向所有输出到日志文件 + stdout
+LOG_FILE="/data/local/tmp/metainstall-${MODID}.log"
+exec > >(tee -a "$LOG_FILE")
+exec 2>&1
+
+echo "=== metainstall.sh START for module: $MODID ==="
+echo "MODPATH=$MODPATH"
+echo "MODID=$MODID"
+echo "ZIPFILE=$ZIPFILE"
+echo "Time: $(date)"
+
 # Constants
 IMG_FILE="/data/adb/metamodule/modules.img"
 MNT_DIR="/data/adb/metamodule/mnt"
+
+# Log to both ui_print and kernel dmesg for debugging
+log_both() {
+    local msg="$1"
+    ui_print "- $msg"
+    echo "[meta-overlayfs-metainstall] $msg" > /dev/kmsg 2>/dev/null || true
+}
 
 # Ensure ext4 image is mounted
 ensure_image_mounted() {
     if ! mountpoint -q "$MNT_DIR" 2>/dev/null; then
         ui_print "- Mounting modules image"
+        log_both "Mounting modules image from $IMG_FILE"
         mkdir -p "$MNT_DIR"
         chcon u:object_r:ksu_file:s0 "$IMG_FILE" 2>/dev/null
         mount -t ext4 -o loop,rw,noatime "$IMG_FILE" "$MNT_DIR" || {
             abort "! Failed to mount modules image"
         }
         ui_print "- Image mounted successfully"
+        log_both "Image mounted successfully at $MNT_DIR"
     else
         ui_print "- Image already mounted"
+        log_both "Image already mounted at $MNT_DIR"
     fi
 }
 
@@ -31,14 +52,17 @@ ensure_image_mounted() {
 module_requires_overlay_move() {
     if [ -f "$MODPATH/skip_mount" ]; then
         ui_print "- skip_mount flag detected; keeping files under /data/adb/modules"
+        log_both "Module $MODID: skip_mount flag detected"
         return 1
     fi
 
     if [ ! -d "$MODPATH/system" ]; then
         ui_print "- No system/ directory detected; keeping files under /data/adb/modules"
+        log_both "Module $MODID: No system/ directory detected"
         return 1
     fi
 
+    log_both "Module $MODID: found system/ directory, will move to image"
     return 0
 }
 
@@ -84,6 +108,7 @@ copy_selinux_contexts() {
 # `/data/adb/modules/<module_id>/` 下（主要影响磁盘占用，不影响挂载逻辑）。
 post_install_to_image() {
     ui_print "- Copying module content to image"
+    log_both "Copying module $MODID content to image"
 
     set_perm "$MNT_DIR" 0 0 0755 0644
 
@@ -91,17 +116,21 @@ post_install_to_image() {
     mkdir -p "$MOD_IMG_DIR"
     set_perm "$MOD_IMG_DIR" 0 0 0755 0644
 
-            # 拷贝该模块暴露的所有分区目录（如果存在）
+    # 拷贝该模块暴露的所有分区目录（如果存在）
     for partition in system vendor product system_ext odm oem; do
         if [ -d "$MODPATH/$partition" ]; then
             ui_print "- Copying $partition/"
+            log_both "Module $MODID: Copying $partition/ to $MOD_IMG_DIR/"
             cp -af "$MODPATH/$partition" "$MOD_IMG_DIR/" || {
-                ui_print "! Warning: Failed to move $partition"
+                ui_print "! Warning: Failed to copy $partition"
+                log_both "Module $MODID: Warning - Failed to copy $partition, continuing..."
                 continue
             }
+            log_both "Module $MODID: Successfully copied $partition, now copying SELinux contexts"
             copy_selinux_contexts "$MODPATH/$partition" "$MOD_IMG_DIR/$partition"
         fi
     done
+    log_both "Module $MODID: Finished copying all partitions to image"
 }
 
 # 当前脚本中未使用的辅助函数（保留给后续 overlay 替换/opaque 语义扩展）。
@@ -112,6 +141,7 @@ mark_replace() {
 }
 
 ui_print "- Using meta-overlayfs metainstall"
+log_both "=== meta-overlayfs metainstall starting for module $MODID ==="
 
 install_module
 
@@ -120,6 +150,10 @@ if module_requires_overlay_move; then
     post_install_to_image
 else
     ui_print "- Skipping move to modules image"
+    log_both "Module $MODID: Skipping move to modules image"
 fi
 
 ui_print "- Installation complete"
+log_both "=== meta-overlayfs metainstall completed for module $MODID ==="
+echo "=== metainstall.sh END for module: $MODID ==="
+echo "Log file: $LOG_FILE"

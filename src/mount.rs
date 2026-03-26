@@ -285,18 +285,18 @@ fn collect_enabled_modules(metadata_dir: &str) -> Result<Vec<String>> {
 
         // Check status markers
         if path.join(DISABLE_FILE_NAME).exists() {
-            info!("Module {} is disabled, skipping", module_id);
+            info!("Module {} disabled (has disable marker)", module_id);
             continue;
         }
 
         if path.join(SKIP_MOUNT_FILE_NAME).exists() {
-            info!("Module {} has skip_mount, skipping", module_id);
+            info!("Module {} skip_mount (has skip_mount marker)", module_id);
             continue;
         }
 
         // Optional: verify module.prop exists
         if !path.join("module.prop").exists() && !path.eq(Path::new(SYSTEM_RW_DIR)) {
-            warn!("Module {} has no module.prop, skipping", module_id);
+            warn!("Module {} no module.prop, skipping", module_id);
             continue;
         }
 
@@ -318,19 +318,20 @@ fn collect_enabled_modules(metadata_dir: &str) -> Result<Vec<String>> {
 /// 2) 从 content 中读取每个模块对应分区目录作为 lowerdir；
 /// 3) 对 `/system` 以及其它分区分别执行 overlay 挂载。
 pub fn mount_modules_systemlessly(metadata_dir: &str, content_dir: &str) -> Result<()> {
-    info!("Scanning modules (dual-directory mode)");
-    info!("  Metadata: {}", metadata_dir);
-    info!("  Content: {}", content_dir);
+    info!("=== mount_modules_systemlessly START ===");
+    info!("Metadata: {}", metadata_dir);
+    info!("Content: {}", content_dir);
 
     // 1. Traverse metadata directory, collect enabled module IDs
     let enabled_modules = collect_enabled_modules(metadata_dir)?;
 
     if enabled_modules.is_empty() {
         info!("No enabled modules found");
+        info!("=== mount_modules_systemlessly END (no modules) ===");
         return Ok(());
     }
 
-    info!("Found {} enabled module(s)", enabled_modules.len());
+    info!("Found {} enabled module(s): {:?}", enabled_modules.len(), enabled_modules);
 
     // 2. Initialize partition lowerdir lists
     let partition = vec!["vendor", "product", "system_ext", "odm", "oem"];
@@ -346,7 +347,7 @@ pub fn mount_modules_systemlessly(metadata_dir: &str, content_dir: &str) -> Resu
         let module_content_path = Path::new(content_dir).join(module_id);
 
         if !module_content_path.exists() {
-            warn!("Module {} has no content directory, skipping", module_id);
+            warn!("Module {} has no content directory at {}, skipping", module_id, module_content_path.display());
             continue;
         }
 
@@ -356,7 +357,7 @@ pub fn mount_modules_systemlessly(metadata_dir: &str, content_dir: &str) -> Resu
         let system_path = module_content_path.join("system");
         if system_path.is_dir() {
             system_lowerdir.push(system_path.display().to_string());
-            info!("  + system/");
+            info!("  + system/ found for {}", module_id);
         }
 
         // Collect other partitions
@@ -366,24 +367,24 @@ pub fn mount_modules_systemlessly(metadata_dir: &str, content_dir: &str) -> Resu
                 && let Some(v) = partition_lowerdir.get_mut(*part)
             {
                 v.push(part_path.display().to_string());
-                info!("  + {}/", part);
+                info!("  + {}/ found for {}", part, module_id);
             }
         }
     }
 
     // 4. Mount partitions
-    info!("Mounting partitions...");
+    info!("=== Mounting partitions ===");
 
     if let Err(e) = mount_partition("system", &system_lowerdir) {
-        warn!("mount system failed: {e:#}");
+        warn!("system mount failed: {:#}", e);
     }
 
     for (k, v) in partition_lowerdir {
         if let Err(e) = mount_partition(&k, &v) {
-            warn!("mount {k} failed: {e:#}");
+            warn!("{} mount failed: {:#}", k, e);
         }
     }
 
-    info!("All partitions processed");
+    info!("=== mount_modules_systemlessly END (success) ===");
     Ok(())
 }
