@@ -1,6 +1,13 @@
 #!/bin/bash
 set -e
 
+# Ensure cargo-installed tools (e.g. `cross` / `cargo-ndk`) are discoverable.
+# Some environments don't include `~/.cargo/bin` in PATH by default.
+case ":$PATH:" in
+  *":$HOME/.cargo/bin:"*) ;;
+  *) export PATH="$HOME/.cargo/bin:$PATH" ;;
+esac
+
 # Build script for meta-overlayfs.
 #
 # 功能：
