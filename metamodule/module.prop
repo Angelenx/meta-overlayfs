@@ -1,7 +1,7 @@
 id=meta-overlayfs
 metamodule=1
-name=OverlayFS MetaModule
+name=OverlayFS MetaModule By Angelen
 version=1.3.1
 versionCode=13100
-author=KernelSU Developers
-description=An implementation of a metamodule using OverlayFS for KernelSU
+author=Angelen
+description=Not Running
