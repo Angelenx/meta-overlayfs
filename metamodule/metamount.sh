@@ -49,7 +49,6 @@ if ! mountpoint -q "$MNT_DIR" 2>/dev/null; then
         exit 1
     fi
     log "Image mounted successfully at $MNT_DIR"
-    ls -la "$MNT_DIR" >> /dev/kmsg 2>/dev/null || true
 else
     log "Image already mounted at $MNT_DIR"
 fi

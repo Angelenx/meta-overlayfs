@@ -83,40 +83,65 @@ module_requires_overlay_move() {
     return 0
 }
 
-# 拷贝 SELinux 上下文。
+# 从系统实际分区路径获取 SELinux context 并应用到镜像中的文件。
 #
-# ext4 镜像内的文件会由运行时读取并参与挂载，因此需要尽量保持 SELinux context。
-# 这里通过 `chcon --reference` 镜像 src 中每个条目到 dst。
-copy_selinux_contexts() {
+# 之前的实现是从模块源文件（zip 解压产物）复制 context，但那些 context 可能不正确。
+# 改进：以系统中对应路径的 context 为准（例如 /odm/etc/ 的 context 从真正的 /odm/etc/ 获取），
+# 这样 overlayfs 的 lowerdir 文件就和系统分区保持完全一致，避免 tag mismatch。
+#
+# 参数：
+#   $1 = partition name (e.g., "system", "vendor", "odm")
+#   $2 = destination directory in image (e.g., /data/adb/metamodule/mnt/<module_id>/odm)
+apply_selinux_contexts() {
     command -v chcon >/dev/null 2>&1 || return 0
 
-    SRC="$1"
+    PARTITION="$1"
     DST="$2"
 
-    if [ -z "$SRC" ] || [ -z "$DST" ] || [ ! -e "$SRC" ] || [ ! -e "$DST" ]; then
+    if [ -z "$PARTITION" ] || [ -z "$DST" ] || [ ! -e "$DST" ]; then
         return 0
     fi
 
-    CHCON_FLAG=""
-    if [ -L "$SRC" ]; then
-        CHCON_FLAG="-h"
+    # 系统中对应分区的根路径
+    SYSTEM_REF="/$PARTITION"
+    if [ ! -d "$SYSTEM_REF" ]; then
+        log_both "  SELinux: system reference $SYSTEM_REF not found, skipping"
+        return 0
     fi
-    chcon $CHCON_FLAG --reference="$SRC" "$DST" 2>/dev/null || true
 
-    find "$SRC" -print | while IFS= read -r PATH_SRC; do
-        if [ "$PATH_SRC" = "$SRC" ]; then
-            continue
-        fi
-        REL_PATH="${PATH_SRC#"${SRC}/"}"
-        PATH_DST="$DST/$REL_PATH"
-        if [ -e "$PATH_DST" ] || [ -L "$PATH_DST" ]; then
+    log_both "  SELinux: applying contexts from $SYSTEM_REF to $DST"
+
+    # 先设置根目录的 context
+    chcon --reference="$SYSTEM_REF" "$DST" 2>/dev/null || true
+
+    # 递归遍历目标目录中的每个文件/目录
+    find "$DST" -print | while IFS= read -r DST_PATH; do
+        [ "$DST_PATH" = "$DST" ] && continue
+
+        # 计算相对路径
+        REL_PATH="${DST_PATH#"${DST}/"}"
+
+        # 系统中对应的路径
+        REF_PATH="$SYSTEM_REF/$REL_PATH"
+
+        if [ -e "$REF_PATH" ] || [ -L "$REF_PATH" ]; then
+            # 系统中存在对应文件，直接从系统获取 context
             CHCON_FLAG=""
-            if [ -L "$PATH_SRC" ]; then
-                CHCON_FLAG="-h"
+            [ -L "$DST_PATH" ] && CHCON_FLAG="-h"
+            chcon $CHCON_FLAG --reference="$REF_PATH" "$DST_PATH" 2>/dev/null || true
+        elif [ -e "$DST_PATH" ]; then
+            # 系统中不存在（模块新增的文件），使用父目录的 context
+            PARENT_REL=$(dirname "$REL_PATH")
+            PARENT_REF="$SYSTEM_REF/$PARENT_REL"
+            if [ -d "$PARENT_REF" ]; then
+                CHCON_FLAG=""
+                [ -L "$DST_PATH" ] && CHCON_FLAG="-h"
+                chcon $CHCON_FLAG --reference="$PARENT_REF" "$DST_PATH" 2>/dev/null || true
             fi
-            chcon $CHCON_FLAG --reference="$PATH_SRC" "$PATH_DST" 2>/dev/null || true
         fi
     done
+
+    log_both "  SELinux: contexts applied for $PARTITION"
 }
 
 # 安装完成后的归档步骤：把分区目录拷贝到 ext4 镜像中。
@@ -127,11 +152,13 @@ post_install_to_image() {
     ui_print "- Copying module content to image"
     log_both "Copying module $MODID content to image"
 
-    set_perm "$MNT_DIR" 0 0 0755 0644
+    chmod 0755 "$MNT_DIR"
+    chown 0:0 "$MNT_DIR"
 
     MOD_IMG_DIR="$MNT_DIR/$MODID"
     mkdir -p "$MOD_IMG_DIR"
-    set_perm "$MOD_IMG_DIR" 0 0 0755 0644
+    chmod 0755 "$MOD_IMG_DIR"
+    chown 0:0 "$MOD_IMG_DIR"
 
     # 拷贝该模块暴露的所有分区目录（如果存在）
     for partition in system vendor product system_ext odm oem; do
@@ -143,8 +170,8 @@ post_install_to_image() {
                 log_both "Module $MODID: Warning - Failed to copy $partition, continuing..."
                 continue
             }
-            log_both "Module $MODID: Successfully copied $partition, now copying SELinux contexts"
-            copy_selinux_contexts "$MODPATH/$partition" "$MOD_IMG_DIR/$partition"
+            log_both "Module $MODID: Successfully copied $partition, applying SELinux contexts"
+            apply_selinux_contexts "$partition" "$MOD_IMG_DIR/$partition"
         fi
     done
     log_both "Module $MODID: Finished copying all partitions to image"
